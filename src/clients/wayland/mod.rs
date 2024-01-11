@@ -3,7 +3,10 @@ mod wl_output;
 mod wl_seat;
 
 use crate::error::ERR_CHANNEL_RECV;
-use crate::{arc_mut, lock, register_client, send, Ironbar};
+use crate::{
+    arc_mut, lock,
+    register_client, send, Ironbar,
+};
 use std::sync::{Arc, Mutex};
 
 use calloop_channel::Event::Msg;
@@ -26,7 +29,7 @@ use wayland_client::{Connection, QueueHandle};
 pub use wl_output::OutputEvent;
 
 cfg_if! {
-    if #[cfg(feature = "focused")] {
+    if #[cfg(any(feature = "focused", feature = "launcher"))] {
         mod wlr_foreign_toplevel;
         use crate::{delegate_foreign_toplevel_handle, delegate_foreign_toplevel_manager};
         use wlr_foreign_toplevel::manager::ToplevelManagerState;
@@ -58,7 +61,7 @@ cfg_if! {
 #[derive(Debug)]
 pub enum Event {
     Output(OutputEvent),
-    #[cfg(feature = "focused")]
+    #[cfg(any(feature = "focused", feature = "launcher"))]
     Toplevel(ToplevelEvent),
     #[cfg(feature = "clipboard")]
     Clipboard(ClipboardItem),
@@ -87,9 +90,9 @@ pub enum Response {
     OutputInfo(Option<OutputInfo>),
     OutputInfoAll(Vec<OutputInfo>),
 
-    #[cfg(feature = "focused")]
+    #[cfg(any(feature = "focused", feature = "launcher"))]
     ToplevelInfo(Option<ToplevelInfo>),
-    #[cfg(feature = "focused")]
+    #[cfg(any(feature = "focused", feature = "launcher"))]
     ToplevelInfoAll(Vec<ToplevelInfo>),
 
     #[cfg(feature = "clipboard")]
@@ -113,7 +116,7 @@ pub struct Client {
     rx: Arc<Mutex<std::sync::mpsc::Receiver<Response>>>,
 
     output_channel: BroadcastChannel<OutputEvent>,
-    #[cfg(feature = "focused")]
+    #[cfg(any(feature = "focused", feature = "launcher"))]
     toplevel_channel: BroadcastChannel<ToplevelEvent>,
     #[cfg(feature = "clipboard")]
     clipboard_channel: BroadcastChannel<ClipboardItem>,
@@ -127,7 +130,7 @@ impl Client {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
 
         let output_channel = broadcast::channel(32);
-        #[cfg(feature = "focused")]
+        #[cfg(any(feature = "focused", feature = "launcher"))]
         let toplevel_channel = broadcast::channel(32);
 
         #[cfg(feature = "clipboard")]
@@ -140,7 +143,7 @@ impl Client {
         // listen to events
         {
             let output_tx = output_channel.0.clone();
-            #[cfg(feature = "focused")]
+            #[cfg(any(feature = "focused", feature = "launcher"))]
             let toplevel_tx = toplevel_channel.0.clone();
 
             #[cfg(feature = "clipboard")]
@@ -151,7 +154,7 @@ impl Client {
                 while let Some(event) = event_rx.recv().await {
                     match event {
                         Event::Output(event) => send!(output_tx, event),
-                        #[cfg(feature = "focused")]
+                        #[cfg(any(feature = "focused", feature = "launcher"))]
                         Event::Toplevel(event) => send!(toplevel_tx, event),
                         #[cfg(feature = "clipboard")]
                         Event::Clipboard(item) => send!(clipboard_tx, item),
@@ -165,7 +168,7 @@ impl Client {
             rx: arc_mut!(response_rx),
 
             output_channel: output_channel.into(),
-            #[cfg(feature = "focused")]
+            #[cfg(any(feature = "focused", feature = "launcher"))]
             toplevel_channel: toplevel_channel.into(),
             #[cfg(feature = "clipboard")]
             clipboard_channel: clipboard_channel.into(),
@@ -199,7 +202,7 @@ pub struct Environment {
     response_tx: std::sync::mpsc::Sender<Response>,
 
     // local state
-    #[cfg(feature = "focused")]
+    #[cfg(any(feature = "focused", feature = "launcher"))]
     handles: Vec<ToplevelHandle>,
 
     // -- clipboard --
@@ -224,7 +227,7 @@ delegate_output!(Environment);
 delegate_seat!(Environment);
 
 cfg_if! {
-    if #[cfg(feature = "focused")] {
+    if #[cfg(any(feature = "focused", feature = "launcher"))] {
         delegate_foreign_toplevel_manager!(Environment);
         delegate_foreign_toplevel_handle!(Environment);
     }
@@ -264,7 +267,7 @@ impl Environment {
 
         let output_state = OutputState::new(&globals, &qh);
         let seat_state = SeatState::new(&globals, &qh);
-        #[cfg(feature = "focused")]
+        #[cfg(any(feature = "focused", feature = "launcher"))]
         ToplevelManagerState::bind(&globals, &qh)
             .expect("to bind to wlr_foreign_toplevel_manager global");
 
@@ -282,7 +285,7 @@ impl Environment {
             loop_handle: loop_handle.clone(),
             event_tx,
             response_tx,
-            #[cfg(feature = "focused")]
+            #[cfg(any(feature = "focused", feature = "launcher"))]
             handles: vec![],
 
             #[cfg(feature = "clipboard")]
@@ -324,7 +327,7 @@ impl Environment {
                 let infos = env.output_info_all();
                 send!(env.response_tx, Response::OutputInfoAll(infos));
             }
-            #[cfg(feature = "focused")]
+            #[cfg(any(feature = "focused", feature = "launcher"))]
             Msg(Request::ToplevelInfoAll) => {
                 let infos = env
                     .handles
@@ -334,23 +337,20 @@ impl Environment {
                 send!(env.response_tx, Response::ToplevelInfoAll(infos));
             }
             Msg(Request::ToplevelFocus(id)) => {
-                #[cfg(feature = "focused")]
-                let handle = env
-                    .handles
-                    .iter()
-                    .find(|handle| handle.info().map_or(false, |info| info.id == id));
-
+                #[cfg(any(feature = "focused", feature = "launcher"))]
+                let handle = env.handles.iter().find(|handle| handle.info().map_or(false, |info| info.id == id));
+            
                 #[cfg(not(any(feature = "focused", feature = "launcher")))]
                 let handle: Option<()> = None;
-
-                #[cfg(feature = "focused")]
+                
+                #[cfg(any(feature = "focused", feature = "launcher"))]
                 if let Some(handle) = handle {
                     let seat = env.default_seat();
                     handle.focus(&seat);
                 }
-
+            
                 send!(env.response_tx, Response::Ok);
-            }
+            }            
             #[cfg(feature = "clipboard")]
             Msg(Request::CopyToClipboard(item)) => {
                 env.copy_to_clipboard(item);
@@ -362,9 +362,7 @@ impl Environment {
                 send!(env.response_tx, Response::ClipboardItem(item));
             }
             calloop_channel::Event::Closed => error!("request channel unexpectedly closed"),
-            smithay_client_toolkit::reexports::calloop::channel::Event::Msg(
-                crate::clients::wayland::Request::ToplevelInfoAll,
-            ) => unreachable!(),
+            smithay_client_toolkit::reexports::calloop::channel::Event::Msg(crate::clients::wayland::Request::ToplevelInfoAll) => unreachable!()
         }
     }
 }
